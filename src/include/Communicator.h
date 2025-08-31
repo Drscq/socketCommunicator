@@ -2,6 +2,7 @@
 #define COMMUNICATOR_H
 
 #include <string>
+#include <vector>
 #include <zmq.hpp>
 class Communicator {
 public:
@@ -14,6 +15,8 @@ public:
     const std::string& getAddress() const noexcept { return address; }
 
     // run router or dealer mod
+    void setUpRouter();
+    void setUpDealer(std::vector<int> party_list);
 
 private:
     int id;
