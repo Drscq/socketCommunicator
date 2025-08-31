@@ -22,6 +22,10 @@ endif()
 ## Output Directories (put all artifacts under build/test)
 set(OUTPUT_TEST_DIR ${CMAKE_BINARY_DIR}/test)
 file(MAKE_DIRECTORY ${OUTPUT_TEST_DIR})
+# Find ZeroMQ
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED libzmq)
+
 # Library target for core code
 add_library(socket_communicator
     src/lib/Communicator.cpp
@@ -29,6 +33,15 @@ add_library(socket_communicator
 
 target_include_directories(socket_communicator PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+    ${ZMQ_INCLUDE_DIRS}
+)
+
+target_link_libraries(socket_communicator
+    ${ZMQ_LIBRARIES}
+)
+
+target_compile_options(socket_communicator PRIVATE
+    ${ZMQ_CFLAGS_OTHER}
 )
 
 # ---- Tests ----
@@ -65,4 +78,5 @@ if(APPLE)
 endif()
 
 include(GoogleTest)
+gtest_discover_tests(socket_communicator_test)
 

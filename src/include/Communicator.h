@@ -2,7 +2,7 @@
 #define COMMUNICATOR_H
 
 #include <string>
-
+#include <zmq.hpp>
 class Communicator {
 public:
     Communicator(int id, int port_base, std::string address = "localhost");
@@ -12,6 +12,8 @@ public:
     int getId() const noexcept { return id; }
     int getPortBase() const noexcept { return port_base; }
     const std::string& getAddress() const noexcept { return address; }
+
+    // run router or dealer mod
 
 private:
     int id;
