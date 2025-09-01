@@ -85,3 +85,63 @@ bool Communicator::routerReceive(std::string& fromIdentity, std::string& payload
     payload.assign(static_cast<const char*>(payloadMsg.data()), payloadMsg.size());
     return true;
 }
+
+bool Communicator::routerSend(const std::string& toIdentity, const std::string& payload) {
+    if (!router_) return false;
+    // ROUTER send multipart: [identity][payload] (no delimiter)
+    zmq::message_t idFrame(toIdentity.begin(), toIdentity.end());
+    zmq::message_t payloadFrame(payload.begin(), payload.end());
+
+    auto s1 = router_->send(idFrame, zmq::send_flags::sndmore);
+    if (!s1.has_value()) return false;
+    auto s2 = router_->send(payloadFrame, zmq::send_flags::none);
+    return s2.has_value();
+}
+
+bool Communicator::dealerReceive(std::string& payload, int timeoutMs) {
+    if (!dealer_) return false;
+    zmq::pollitem_t items[] = { { static_cast<void*>(*dealer_), 0, ZMQ_POLLIN, 0 } };
+    zmq::poll(items, 1, std::chrono::milliseconds(timeoutMs));
+    if (!(items[0].revents & ZMQ_POLLIN)) return false;
+
+    // Receive all frames of the message, skip empties, return last non-empty as payload
+    std::vector<zmq::message_t> frames;
+    while (true) {
+        zmq::message_t frame;
+        auto r = dealer_->recv(frame, zmq::recv_flags::none);
+        if (!r.has_value()) return false;
+        frames.push_back(std::move(frame));
+        int more = 0;
+        size_t more_size = sizeof(more);
+        dealer_->getsockopt(ZMQ_RCVMORE, &more, &more_size);
+        if (!more) break;
+    }
+    for (auto it = frames.rbegin(); it != frames.rend(); ++it) {
+        if (it->size() > 0) {
+            payload.assign(static_cast<const char*>(it->data()), it->size());
+            return true;
+        }
+    }
+    payload.clear();
+    return true;
+}
+
+bool Communicator::dealerSendTo(int peerId, const std::string& payload) {
+    if (peerId == this->id) return false;
+    if (!context_) {
+        context_ = std::make_unique<zmq::context_t>(1);
+    }
+
+    auto& sockPtr = perPeerDealer_[peerId];
+    if (!sockPtr) {
+        sockPtr = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
+        sockPtr->set(zmq::sockopt::routing_id, std::to_string(this->id));
+        const std::string addr = "tcp://" + address + ":" + std::to_string(port_base + peerId);
+        sockPtr->connect(addr);
+        std::cout << "Dealer " << this->id << " (dedicated) connected to " << addr << std::endl;
+    }
+
+    zmq::message_t msg(payload.begin(), payload.end());
+    auto rc = sockPtr->send(msg, zmq::send_flags::none);
+    return rc.has_value();
+}

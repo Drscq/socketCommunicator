@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 #include <zmq.hpp>
 class Communicator {
 public:
@@ -28,6 +29,15 @@ public:
     // Returns true if a message was received before timeoutMs, false otherwise.
     bool routerReceive(std::string& fromIdentity, std::string& payload, int timeoutMs = 1000);
 
+    // Router sends a single-frame payload to a specific dealer identity.
+    bool routerSend(const std::string& toIdentity, const std::string& payload);
+
+    // Dealer receives one message payload from router.
+    bool dealerReceive(std::string& payload, int timeoutMs = 1000);
+
+    // Dealer sends to a specific peer's router using a dedicated per-peer DEALER socket.
+    bool dealerSendTo(int peerId, const std::string& payload);
+
 private:
     int id;
     int port_base;
@@ -37,6 +47,9 @@ private:
     std::unique_ptr<zmq::context_t> context_;
     std::unique_ptr<zmq::socket_t> router_;
     std::unique_ptr<zmq::socket_t> dealer_;
+
+    // Optional: dedicated DEALER sockets per peer for targeted sends.
+    std::unordered_map<int, std::unique_ptr<zmq::socket_t>> perPeerDealer_;
 };
 
 #endif // COMMUNICATOR_H
