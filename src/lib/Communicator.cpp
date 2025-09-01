@@ -134,9 +134,20 @@ bool Communicator::dealerSendTo(int peerId, const std::string& payload) {
 
     auto& sockPtr = perPeerDealer_[peerId];
     if (!sockPtr) {
-        sockPtr = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
-        sockPtr->set(zmq::sockopt::routing_id, std::to_string(this->id));
         const std::string addr = "tcp://" + address + ":" + std::to_string(port_base + peerId);
+        // If a shared DEALER is connected to this peer endpoint, disconnect it to avoid
+        // duplicate identity connections to the same ROUTER.
+        if (dealer_) {
+            try {
+                dealer_->disconnect(addr);
+            } catch (const zmq::error_t&) {
+                // Ignore if not connected; best-effort disconnect
+            }
+        }
+        sockPtr = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
+        // Keep identity as the plain party id so ROUTER sees the expected id.
+        const std::string plainId = std::to_string(this->id);
+        sockPtr->set(zmq::sockopt::routing_id, plainId);
         sockPtr->connect(addr);
         std::cout << "Dealer " << this->id << " (dedicated) connected to " << addr << std::endl;
     }

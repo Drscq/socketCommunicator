@@ -57,28 +57,38 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
-add_executable(socket_communicator_test tests/CommunicatorTest.cpp)
-
-# Link libs
-target_link_libraries(socket_communicator_test
-    PRIVATE
+####################################
+############### Tests ##############
+####################################
+# Keep a simple macro to define a gtest executable and register it with CTest.
+# Use a custom name to avoid clashing with CTest's built-in add_test command.
+include(GoogleTest)
+set(ALL_TEST_TARGETS)
+macro(add_sc_test TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_TEST_DIR})
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/include
+    )
+    target_link_libraries(${TARGET_NAME} PRIVATE
         socket_communicator
         GTest::gtest_main
-)
-target_include_directories(socket_communicator_test PRIVATE
-    ${GTEST_INCLUDE_DIRS}
-)
-set_target_properties(socket_communicator_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_TEST_DIR}
-)
+    )
+    if(APPLE)
+        target_link_options(${TARGET_NAME} PRIVATE -Wl,-ld_classic)
+    endif()
+    # Register tests in this binary with CTest
+    gtest_discover_tests(${TARGET_NAME})
+    # Track for aggregate build target
+    list(APPEND ALL_TEST_TARGETS ${TARGET_NAME})
+endmacro()
 
-# macOS linker workaround
-if(APPLE)
-    target_link_options(socket_communicator_test PRIVATE -Wl,-ld_classic)
-endif()
+# Define individual test binaries per suite using the macro (always add; build by target)
+add_sc_test(test_communicator tests/CommunicatorTest.cpp)
+add_sc_test(test_mpc          tests/MPCPartiesTest.cpp)
 
-include(GoogleTest)
-gtest_discover_tests(socket_communicator_test)
+# Aggregate target to build all test executables
+add_custom_target(build_tests DEPENDS ${ALL_TEST_TARGETS})
 
 
 # ---- Tools ----
@@ -87,4 +97,3 @@ target_link_libraries(latency_benchmark PRIVATE socket_communicator)
 set_target_properties(latency_benchmark PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools
 )
-
