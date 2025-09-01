@@ -8,36 +8,80 @@ Communicator::~Communicator() {}
 
 
 void Communicator::setUpRouter() {
-    zmq::context_t context(1);
-    zmq::socket_t router(context, zmq::socket_type::router);
-    std::string bind_address = "tcp://" + address + ":" + std::to_string(port_base + id);
-    router.bind(bind_address);
-    std::cout << "Router " << id << " running at " << bind_address << std::endl;
-
-    // while (true) {
-    //     // ROUTER sockets receive [identity][empty][payload]
-    //     zmq::message_t identity;
-    //     zmq::message_t empty;
-    //     zmq::message_t payload;
-
-    //     router.recv(identity, zmq::recv_flags::none);
-    //     router.recv(empty, zmq::recv_flags::none);
-    //     router.recv(payload, zmq::recv_flags::none);
-
-    //     std::cout << "Router " << id << " received message from " << identity.to_string() << std::endl;
-    // }
+    if (!context_) {
+        context_ = std::make_unique<zmq::context_t>(1);
+    }
+    if (!router_) {
+        router_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::router);
+        std::string bind_address = "tcp://" + address + ":" + std::to_string(port_base + id);
+        router_->bind(bind_address);
+        std::cout << "Router " << id << " running at " << bind_address << std::endl;
+    }
 }
 
 
 void Communicator::setUpDealer(std::vector<int> party_list) {
-    zmq::context_t context(1);
-    zmq::socket_t dealer(context, zmq::socket_type::dealer);
+    if (!context_) {
+        context_ = std::make_unique<zmq::context_t>(1);
+    }
+    if (!dealer_) {
+        dealer_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
+        // Dealer identity should be our id
+        dealer_->set(zmq::sockopt::routing_id, std::to_string(this->id));
+    }
     for (auto& party_id : party_list) {
         if (party_id == this->id) continue; // skip self
         std::string connect_address = "tcp://" + address + ":" + std::to_string(port_base + party_id);
-        // routing_id expects a string identifier; convert the integer id to a string
-        dealer.set(zmq::sockopt::routing_id, std::to_string(party_id));
-        dealer.connect(connect_address);
+        dealer_->connect(connect_address);
         std::cout << "Dealer " << this->id << " connected to " << connect_address << std::endl;
     }
+}
+
+bool Communicator::dealerSend(const std::string& payload) {
+    if (!dealer_) return false;
+    zmq::message_t msg(payload.begin(), payload.end());
+    auto rc = dealer_->send(msg, zmq::send_flags::none);
+    return rc.has_value();
+}
+
+bool Communicator::routerReceive(std::string& fromIdentity, std::string& payload, int timeoutMs) {
+    if (!router_) return false;
+    // Poll once for readability with timeout
+    zmq::pollitem_t items[] = { { static_cast<void*>(*router_), 0, ZMQ_POLLIN, 0 } };
+    zmq::poll(items, 1, std::chrono::milliseconds(timeoutMs));
+    if (!(items[0].revents & ZMQ_POLLIN)) {
+        return false; // timeout
+    }
+
+    // ROUTER sockets receive [identity][payload]
+    zmq::message_t identity;
+    zmq::message_t payloadMsg;
+
+    // Some patterns insert an empty delimiter; handle both 2- or 3-part messages
+    if (!router_->recv(identity, zmq::recv_flags::none)) return false;
+
+    // Peek if there is a second frame
+    zmq::message_t second;
+    auto secondRes = router_->recv(second, zmq::recv_flags::none);
+    if (!secondRes.has_value()) return false;
+
+    // Common patterns:
+    // 1) [id][payload]
+    // 2) [id][empty][payload]
+    int more = 0;
+    size_t more_size = sizeof(more);
+    router_->getsockopt(ZMQ_RCVMORE, &more, &more_size);
+
+    if (more && second.size() == 0) {
+        // Empty delimiter present; next frame is payload
+        auto payloadRes = router_->recv(payloadMsg, zmq::recv_flags::none);
+        if (!payloadRes.has_value()) return false;
+    } else {
+        // No delimiter; 'second' is payload
+        payloadMsg = std::move(second);
+    }
+
+    fromIdentity = identity.to_string();
+    payload.assign(static_cast<const char*>(payloadMsg.data()), payloadMsg.size());
+    return true;
 }

@@ -63,3 +63,24 @@ TEST(CommunicatorTest, IntegrationTestRouterDealerSetup) {
     EXPECT_NO_THROW(router_comm.setUpRouter());
     EXPECT_NO_THROW(dealer_comm.setUpDealer(party_list));
 }
+
+TEST(CommunicatorTest, DealerSendRouterReceive) {
+    // Set up router (id=1) and dealer (id=2) on same address/port base
+    Communicator router{1, 9500, "127.0.0.1"};
+    Communicator dealer{2, 9500, "127.0.0.1"};
+
+    router.setUpRouter();
+    dealer.setUpDealer({1, 2});
+
+    // Give a tiny moment for connection establishment
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Send from dealer and receive at router
+    ASSERT_TRUE(dealer.dealerSend("hello"));
+
+    std::string from;
+    std::string msg;
+    ASSERT_TRUE(router.routerReceive(from, msg, 1000));
+    EXPECT_EQ(from, std::to_string(2));
+    EXPECT_EQ(msg, "hello");
+}
