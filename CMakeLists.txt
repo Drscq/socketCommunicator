@@ -80,3 +80,11 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(socket_communicator_test)
 
+
+# ---- Tools ----
+add_executable(latency_benchmark tools/LatencyBenchmark.cpp)
+target_link_libraries(latency_benchmark PRIVATE socket_communicator)
+set_target_properties(latency_benchmark PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools
+)
+
