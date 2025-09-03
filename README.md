@@ -15,6 +15,14 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+### Running a specific test
+
+You can also run a specific test executable with GoogleTest flags. For example, to run a specific test from the `test_mpc` suite 10 times:
+
+```bash
+./build/test/test_mpc --gtest_filter=MPCPartiesTest.NPartyAllToAllSumThreaded --gtest_repeat=10
+```
+
 ## Latency benchmark
 
 The tool `latency_benchmark` measures the one-way time from a DEALER send to a ROUTER receive for a configurable payload.

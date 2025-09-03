@@ -1,10 +1,62 @@
+#include <thread>
+#include <vector>
+#include <numeric>
 #include "Communicator.h"
 #include <iostream>
+
+
+
+// Send the payload to all peer ROUTERs in parallel (one thread per peer, each with its own DEALER socket)
+bool Communicator::dealerSendToAllParallel(const std::string& payload) {
+    // Assumes setUpPerPeerDealers(...) has been called beforehand for these peers.
+    joinAndClearWorkers();
+
+    for (size_t i = 0; i < num_parties; ++i) {
+        const int peerId = this->ids[i];
+        if (peerId == this->id) continue; // skip self
+        workerThreads_.emplace_back([this, &payload, i, peerId]() {
+            // Use pre-initialized per-peer DEALER sockets; no connect here.
+            workerResults_[i] = this->dealerSendTo(peerId, payload) ? 1 : 0;
+        });
+    }
+
+    for (auto& t : workerThreads_) if (t.joinable()) t.join();
+    workerThreads_.clear();
+
+    // Return true only if all non-self sends succeeded
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] == this->id) continue;
+        if (workerResults_[i] == 0) return false;
+    }
+    return true;
+}
 
 Communicator::Communicator(int id, int port_base, std::string address)
     : id(id), port_base(port_base), address(address) {}
 
-Communicator::~Communicator() {}
+Communicator::Communicator(int id, int port_base, std::string address, int num_parties)
+    : id(id), port_base(port_base), address(address), num_parties(num_parties) {
+        ids.reserve(num_parties);
+        for (int i = 1; i <= num_parties; ++i) {
+            ids.push_back(i);
+        }
+    }
+
+Communicator::~Communicator() {
+    joinAndClearWorkers();
+}
+
+void Communicator::joinAndClearWorkers() noexcept {
+    for (auto& t : workerThreads_) {
+        if (t.joinable()) {
+            try { t.join(); } catch (...) { /* swallow */ }
+        }
+    }
+    workerThreads_.clear();
+    workerResults_.clear();
+    workerResults_.assign(static_cast<size_t>(num_parties), 0);
+    workerThreads_.reserve(num_parties);
+}
 
 
 void Communicator::setUpRouter() {
@@ -15,29 +67,39 @@ void Communicator::setUpRouter() {
         router_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::router);
         std::string bind_address = "tcp://" + address + ":" + std::to_string(port_base + id);
         router_->bind(bind_address);
-        std::cout << "Router " << id << " running at " << bind_address << std::endl;
+        // std::cout << "Router " << id << " running at " << bind_address << std::endl;
     }
 }
 
-
-void Communicator::setUpDealer(std::vector<int> party_list) {
+void Communicator::setUpPerPeerDealers() {
     if (!context_) {
         context_ = std::make_unique<zmq::context_t>(1);
     }
-    if (!dealer_) {
-        dealer_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
-        // Dealer identity should be our id
-        dealer_->set(zmq::sockopt::routing_id, std::to_string(this->id));
-    }
-    for (auto& party_id : party_list) {
+    for (int party_id : this->ids) {
         if (party_id == this->id) continue; // skip self
-        std::string connect_address = "tcp://" + address + ":" + std::to_string(port_base + party_id);
-        dealer_->connect(connect_address);
-        std::cout << "Dealer " << this->id << " connected to " << connect_address << std::endl;
+        auto& sockPtr = perPeerDealer_[party_id];
+        if (sockPtr) continue; // already prepared
+        const std::string addr = "tcp://" + address + ":" + std::to_string(port_base + party_id);
+        // Avoid identity duplication with shared dealer if it was used
+        if (dealer_) {
+            try { dealer_->disconnect(addr); } catch (const zmq::error_t&) {}
+        }
+        sockPtr = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
+        const std::string plainId = std::to_string(this->id);
+        sockPtr->set(zmq::sockopt::routing_id, plainId);
+    // Be tolerant but avoid indefinite blocks on send
+    sockPtr->set(zmq::sockopt::sndtimeo, 1000);
+        sockPtr->connect(addr);
+        // std::cout << "Dealer " << this->id << " (per-peer) connected to " << addr << std::endl;
     }
 }
 
-bool Communicator::dealerSend(const std::string& payload) {
+void Communicator::setUpRouterDealer() {
+    this->setUpRouter();
+    this->setUpPerPeerDealers();
+}
+
+bool Communicator::dealerSendToAll(const std::string& payload) {
     if (!dealer_) return false;
     zmq::message_t msg(payload.begin(), payload.end());
     auto rc = dealer_->send(msg, zmq::send_flags::none);
@@ -46,12 +108,9 @@ bool Communicator::dealerSend(const std::string& payload) {
 
 bool Communicator::routerReceive(std::string& fromIdentity, std::string& payload, int timeoutMs) {
     if (!router_) return false;
-    // Poll once for readability with timeout
-    zmq::pollitem_t items[] = { { static_cast<void*>(*router_), 0, ZMQ_POLLIN, 0 } };
-    zmq::poll(items, 1, std::chrono::milliseconds(timeoutMs));
-    if (!(items[0].revents & ZMQ_POLLIN)) {
-        return false; // timeout
-    }
+    // Use socket receive timeout instead of poll to keep it simple and robust
+    if (timeoutMs >= 0) router_->set(zmq::sockopt::rcvtimeo, timeoutMs);
+    else router_->set(zmq::sockopt::rcvtimeo, -1);
 
     // ROUTER sockets receive [identity][payload]
     zmq::message_t identity;
@@ -74,8 +133,8 @@ bool Communicator::routerReceive(std::string& fromIdentity, std::string& payload
 
     if (more && second.size() == 0) {
         // Empty delimiter present; next frame is payload
-        auto payloadRes = router_->recv(payloadMsg, zmq::recv_flags::none);
-        if (!payloadRes.has_value()) return false;
+    auto payloadRes = router_->recv(payloadMsg, zmq::recv_flags::none);
+    if (!payloadRes.has_value()) return false;
     } else {
         // No delimiter; 'second' is payload
         payloadMsg = std::move(second);
@@ -100,9 +159,7 @@ bool Communicator::routerSend(const std::string& toIdentity, const std::string& 
 
 bool Communicator::dealerReceive(std::string& payload, int timeoutMs) {
     if (!dealer_) return false;
-    zmq::pollitem_t items[] = { { static_cast<void*>(*dealer_), 0, ZMQ_POLLIN, 0 } };
-    zmq::poll(items, 1, std::chrono::milliseconds(timeoutMs));
-    if (!(items[0].revents & ZMQ_POLLIN)) return false;
+    dealer_->set(zmq::sockopt::rcvtimeo, timeoutMs);
 
     // Receive all frames of the message, skip empties, return last non-empty as payload
     std::vector<zmq::message_t> frames;
@@ -132,27 +189,20 @@ bool Communicator::dealerSendTo(int peerId, const std::string& payload) {
         context_ = std::make_unique<zmq::context_t>(1);
     }
 
-    auto& sockPtr = perPeerDealer_[peerId];
-    if (!sockPtr) {
-        const std::string addr = "tcp://" + address + ":" + std::to_string(port_base + peerId);
-        // If a shared DEALER is connected to this peer endpoint, disconnect it to avoid
-        // duplicate identity connections to the same ROUTER.
-        if (dealer_) {
-            try {
-                dealer_->disconnect(addr);
-            } catch (const zmq::error_t&) {
-                // Ignore if not connected; best-effort disconnect
-            }
-        }
-        sockPtr = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::dealer);
-        // Keep identity as the plain party id so ROUTER sees the expected id.
-        const std::string plainId = std::to_string(this->id);
-        sockPtr->set(zmq::sockopt::routing_id, plainId);
-        sockPtr->connect(addr);
-        std::cout << "Dealer " << this->id << " (dedicated) connected to " << addr << std::endl;
-    }
+    auto it = perPeerDealer_.find(peerId);
+    if (it == perPeerDealer_.end() || !it->second) return false; // not prepared
+    auto& sockPtr = it->second;
 
-    zmq::message_t msg(payload.begin(), payload.end());
-    auto rc = sockPtr->send(msg, zmq::send_flags::none);
-    return rc.has_value();
+    // Retry a few times to tolerate concurrent connect races
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        try {
+            zmq::message_t msg(payload.begin(), payload.end());
+            auto rc = sockPtr->send(msg, zmq::send_flags::dontwait);
+            if (rc.has_value()) return true;
+        } catch (const std::exception&) {
+            // fall through to retry
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
 }
