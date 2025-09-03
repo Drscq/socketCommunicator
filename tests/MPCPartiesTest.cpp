@@ -129,33 +129,15 @@ TEST(MPCPartiesTest, NPartyAllToAllSumThreaded) {
     const int base = 15000; // separate port base
     const std::string host = "127.0.0.1";
 
-    // Simple latch for C++17
-    struct Latch {
-        std::mutex m;
-        std::condition_variable cv;
-        int count;
-        explicit Latch(int n) : count(n) {}
-        void arrive() {
-            std::lock_guard<std::mutex> lk(m);
-            if (--count == 0) cv.notify_all();
-        }
-        void wait() {
-            std::unique_lock<std::mutex> lk(m);
-            cv.wait(lk, [&]{ return count == 0; });
-        }
-    };
-
     // Each party i holds value i+1
     const int expected_sum = (N * (N + 1)) / 2; // 1..N
     std::vector<int> totals(N, 0);
-
-    Latch routersReady(N);
     std::vector<std::thread> threads;
     threads.reserve(N);
     std::vector<bool> okFlags(N, true);
 
     for (int i = 0; i < N; ++i) {
-    threads.emplace_back([i, N, base, host, &routersReady, &totals, &okFlags]() {
+    threads.emplace_back([i, N, base, host, &totals, &okFlags]() {
             const int id = i + 1;
             Communicator me(id, base, host, N);
             me.setUpRouterDealer();
