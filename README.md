@@ -1,3 +1,12 @@
+# Potential Artifacts in Microbenchmarks
+
+When benchmarking communication with very small payloads (e.g., 4B–1KB) on localhost, you may observe counterintuitive results, such as decreased time with increased data size. This can be caused by:
+
+- **Overhead Dominance:** Fixed costs (threading, socket setup, context switching) can outweigh actual data transfer time for tiny messages.
+- **System/Library Buffering:** The OS or ZeroMQ may batch or optimize larger messages, making them appear faster.
+- **Measurement Noise:** Fast local tests are sensitive to system load, scheduling, and other background activity.
+
+**Tip:** Use larger payloads (e.g., 4KB–1MB) and average over many runs to get more reliable trends.
 # socketCommunicator
 
 Minimal C++ (CMake + GoogleTest) project that experiments with ZeroMQ ROUTER/DEALER patterns and provides a latency benchmark tool.

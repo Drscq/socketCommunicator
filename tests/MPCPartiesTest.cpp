@@ -8,120 +8,9 @@
 #include <iostream>
 #include <mutex>
 #include <condition_variable>
-
-// // A simple two-party exchange where A sends 5 to B and B sends 6 to A.
-// // Each party computes the sum and verifies it's 11.
-// TEST(MPCPartiesTest, TwoPartyExchangeSumIs11) {
-//     const int base = 12000; // isolate ports from other tests
-//     const std::string host = "127.0.0.1";
-
-//     // Party A (id=1) and Party B (id=2)
-//     Communicator A{1, base, host};
-//     Communicator B{2, base, host};
-
-//     // Each plays both roles: bind router and prepare dealer
-//     A.setUpRouter();
-//     B.setUpRouter();
-//     A.setUpDealer({1,2});
-//     B.setUpDealer({1,2});
-
-//     // Small delay to allow connections
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-//     int numRounds = 10; 
-//     for (int i = 0; i < numRounds; ++i) {
-//         // A -> B: send value 5
-//         ASSERT_TRUE(A.dealerSendToAll("5"));
-//         std::string fromB, recvB;
-//     ASSERT_TRUE(B.routerReceive(fromB, recvB));
-//         EXPECT_EQ(fromB, std::to_string(1));
-//         EXPECT_EQ(recvB, "5");
-
-//         // B -> A: send value 6 back
-//         ASSERT_TRUE(B.dealerSendTo(1, "6"));
-//         std::string recvA;
-//     ASSERT_TRUE(A.routerReceive(fromB, recvA));
-//         EXPECT_EQ(recvA, "6");
-
-//         // Compute sums at both parties
-//         int a_local = 5;
-//         int a_peer = std::stoi(recvA);
-//         int b_local = 6;
-//         int b_peer = std::stoi(recvB);
-
-//         EXPECT_EQ(a_local + a_peer, 11);
-//         EXPECT_EQ(b_local + b_peer, 11);
-//     }
-// }
+#include <iomanip>
 
 
-// // Performance comparison: sequential per-peer send vs parallel send-to-all
-// TEST(MPCPartiesTest, BroadcastPerformance) {
-//     const int N = 5;               // number of parties (>= 2)
-//     const int base = 14000;        // isolated port base
-//     const std::string host = "127.0.0.1";
-//     const std::vector<size_t> sizes = {64, 4096, 65536}; // payload sizes in bytes
-
-//     auto make_payload = [](size_t n) {
-//         std::string s;
-//         s.resize(n, 'x');
-//         return s;
-//     };
-
-//     std::vector<int> ids; ids.reserve(N); for (int i = 1; i <= N; ++i) ids.push_back(i);
-
-//     for (size_t si = 0; si < sizes.size(); ++si) {
-//         // Fresh setup per size for cleaner measurements
-//         std::vector<std::unique_ptr<Communicator>> parties;
-//         parties.reserve(N);
-//         for (int i = 1; i <= N; ++i) parties.emplace_back(std::make_unique<Communicator>(i, base, host));
-//         for (int i = 0; i < N; ++i) parties[i]->setUpRouter();
-//         for (int i = 0; i < N; ++i) parties[i]->setUpDealer(ids);
-//         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-//         const std::string payload = make_payload(sizes[si]);
-//         const int senderIdx = 0; // party id=1 as sender
-
-//         // Drain helper for one message from each receiver (from sender id)
-//     auto drain_from_all = [&](int expectedCount) {
-//             int drained = 0;
-//             for (int j = 0; j < N; ++j) {
-//                 if (j == senderIdx) continue;
-//                 std::string from, data;
-//         ASSERT_TRUE(parties[j]->routerReceive(from, data)) << "receiver " << (j+1) << " blocked";
-//                 // minimal sanity checks
-//                 EXPECT_EQ(from, std::to_string(senderIdx + 1));
-//                 EXPECT_EQ(data.size(), payload.size());
-//                 drained++;
-//             }
-//             EXPECT_EQ(drained, expectedCount);
-//         };
-
-//         // Sequential: per-peer send in a loop using dealerSendTo
-//         {
-//             auto t0 = std::chrono::steady_clock::now();
-//             for (int peerId = 1; peerId <= N; ++peerId) {
-//                 if (peerId == senderIdx + 1) continue;
-//                 ASSERT_TRUE(parties[senderIdx]->dealerSendTo(peerId, payload));
-//             }
-//             // Drain one message at each receiver
-//             drain_from_all(N - 1);
-//             auto t1 = std::chrono::steady_clock::now();
-//             auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-//             std::cout << "Sequential broadcast payload=" << payload.size() << "B took " << us << " us\n";
-//         }
-
-//         // Parallel: send to all using dealerSendToAllParallel
-//         {
-//             auto t0 = std::chrono::steady_clock::now();
-//             ASSERT_TRUE(parties[senderIdx]->dealerSendToAllParallel(payload, ids));
-//             drain_from_all(N - 1);
-//             auto t1 = std::chrono::steady_clock::now();
-//             auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-//             std::cout << "Parallel broadcast payload=" << payload.size() << "B took " << us << " us\n";
-//         }
-//     }
-// }
 
 // Threaded variant: run each party in its own thread to avoid shared-socket identity races
 TEST(MPCPartiesTest, NPartyAllToAllSumThreaded) {
@@ -173,6 +62,88 @@ TEST(MPCPartiesTest, NPartyAllToAllSumThreaded) {
         EXPECT_TRUE(okFlags[i]) << "party " << (i+1) << " had a comms failure";
         EXPECT_EQ(totals[i], expected_sum) << "party " << (i+1) << " wrong total";
     }
+}
+
+// Helper function to run a communication test and measure send time
+static std::chrono::milliseconds run_send_test(int N, const std::string& data, bool use_sequential_send) {
+    const int base_port = 17000;
+    const std::string host = "127.0.0.1";
+    std::vector<std::thread> threads;
+    threads.reserve(N);
+    std::vector<bool> okFlags(N, true);
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < N; ++i) {
+        threads.emplace_back([i, N, base_port, host, &data, use_sequential_send, &okFlags]() {
+            const int id = i + 1;
+            Communicator me(id, base_port, host, N);
+            me.setUpRouterDealer();
+
+            if (use_sequential_send) {
+                for (int peer = 1; peer <= N; ++peer) {
+                    if (peer == id) continue;
+                    if (!me.dealerSendTo(peer, data)) {
+                        okFlags[i] = false;
+                    }
+                }
+            } else {
+                if (!me.dealerSendToAllParallel(data)) {
+                    okFlags[i] = false;
+                }
+            }
+
+            // Still need to receive messages to allow sends to complete
+            for (int r = 0; r < N - 1; ++r) {
+                std::string from, payload;
+                if (!me.routerReceive(from, payload, -1)) {
+                    okFlags[i] = false;
+                    break;
+                }
+            }
+        });
+    }
+
+    for (auto& t : threads) t.join();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+}
+
+TEST(MPCPartiesTest, SendToAllPerformanceComparison) {
+    std::vector<int> party_counts = {2, 4, 8, 14};
+    std::vector<size_t> data_sizes = {4096, 16384, 65536, 262144, 1048576}; // 4KB, 16KB, 64KB, 256KB, 1MB
+    const int iterations = 10; // repeat runs to stabilize measurements
+
+    std::cout << std::endl;
+    std::cout << "--- Send-To-All Performance Comparison ---" << std::endl;
+    std::cout << "N, DataSize (B), Sequential (ms), Parallel (ms)" << std::endl;
+
+    for (int n : party_counts) {
+        for (size_t size : data_sizes) {
+            std::string data(size, 'x');
+
+            long long seq_total_ms = 0;
+            long long par_total_ms = 0;
+
+            for (int it = 0; it < iterations; ++it) {
+                auto seq_duration = run_send_test(n, data, true);
+                // small pause between runs to avoid port/socket reuse flakiness
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                auto par_duration = run_send_test(n, data, false);
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                seq_total_ms += seq_duration.count();
+                par_total_ms += par_duration.count();
+            }
+
+            double seq_avg = static_cast<double>(seq_total_ms) / iterations;
+            double par_avg = static_cast<double>(par_total_ms) / iterations;
+
+            std::cout << std::fixed << std::setprecision(1)
+                      << n << ", " << size << ", " << seq_avg << ", " << par_avg << std::endl;
+        }
+    }
+    std::cout << "----------------------------------------" << std::endl;
 }
 
 
