@@ -79,3 +79,10 @@ Tips:
 - RTT: `ping -c 5 <address>` and take the average
 - Bandwidth: run `iperf3 -s` on one host, then `iperf3 -c <address> -n <total_bytes>` on the other
 - For cross-host experiments, run the benchmark on the sender host and set `--address` to the receiver host
+
+
+## Simulating network conditions
+sudo tc qdisc del dev lo root
+ 
+sudo tc qdisc add dev lo root netem delay 1000ms
+ 
