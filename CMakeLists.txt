@@ -97,3 +97,15 @@ target_link_libraries(latency_benchmark PRIVATE socket_communicator)
 set_target_properties(latency_benchmark PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools
 )
+
+# ---- NetIOMP simple test runner (standalone, no gtest) ----
+add_executable(test_netiomp src/NetIOMP/test_netiomp.cpp)
+target_include_directories(test_netiomp PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/NetIOMP
+)
+set_target_properties(test_netiomp PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_TEST_DIR}
+)
+
+# Include this runner in the aggregate build_tests target for convenience
+add_dependencies(build_tests test_netiomp)

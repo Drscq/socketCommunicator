@@ -87,3 +87,18 @@ sudo tc qdisc del dev lo root
  
 sudo tc qdisc add dev lo root netem delay 1000ms
  
+## NetIOMP local test (3 parties)
+
+A simple local smoke test for the extracted NetIOMP components. Build first, then run three parties on the same base port:
+
+```bash
+PORT=23456; \
+( /home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 1 "$PORT" & pid1=$!; \
+	sleep 0.2; \
+	/home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 2 "$PORT" & pid2=$!; \
+	sleep 0.2; \
+	/home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 3 "$PORT" & pid3=$!; \
+	wait $pid1 $pid2 $pid3 )
+```
+
+You should see Party 1 send to Parties 2 and 3, then Party 2 send to Party 3, with matching receive logs and all parties finishing.
