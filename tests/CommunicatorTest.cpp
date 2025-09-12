@@ -384,7 +384,6 @@ TEST(CommunicatorTest, PubSubBroadcastDeliversToAll) {
     // Start receivers with SUB sockets
     std::vector<std::thread> rxs;
     std::vector<std::string> got(num_parties + 1);
-    std::vector<std::string> from(num_parties + 1);
     for (int rid = 2; rid <= num_parties; ++rid) {
         rxs.emplace_back([&, rid]() {
             Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
@@ -393,7 +392,6 @@ TEST(CommunicatorTest, PubSubBroadcastDeliversToAll) {
             // Block until broadcast arrives
             if (R.subReceive(f, msg, -1)) {
                 got[rid] = msg;
-                from[rid] = f;
             }
         });
     }
@@ -408,7 +406,73 @@ TEST(CommunicatorTest, PubSubBroadcastDeliversToAll) {
     for (auto& t : rxs) if (t.joinable()) t.join();
 
     for (int rid = 2; rid <= num_parties; ++rid) {
-        EXPECT_EQ(from[rid], std::to_string(senderId)) << "receiver id=" << rid;
         EXPECT_EQ(got[rid], payload) << "receiver id=" << rid;
+    }
+}
+
+TEST(CommunicatorTest, TimingOfPubBroadcastAcrossPartyCounts) {
+    using clock = std::chrono::steady_clock;
+    const std::vector<int> party_counts = {2, 4, 6, 8, 10};
+    const size_t payload_size = 1024 * 1024; // 1MB
+    const int iterations_warmup = 5;
+    const int iterations = 1000; // match dealer parallel test for comparability
+
+    for (int num_parties : party_counts) {
+        const int senderId = 1;
+        const int num_receivers = num_parties - 1;
+
+        std::string payload(payload_size, 'b');
+
+        // Publisher: PUB for broadcast + ROUTER to receive ACKs
+        Communicator P{senderId, BASE_PORT, "127.0.0.1", num_parties};
+        P.setUpPublisher();
+        P.setUpRouter();
+
+        // Receivers: SUB to receive broadcasts, DEALER to send ACKs to publisher's ROUTER
+        std::vector<std::thread> rxs;
+        for (int rid = 2; rid <= num_parties; ++rid) {
+            rxs.emplace_back([&, rid]() {
+                Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
+                R.setUpSubscribers();
+                R.setUpPerPeerDealers();
+                std::string f, msg;
+                const int total_rounds = iterations_warmup + iterations;
+                for (int i = 0; i < total_rounds; ++i) {
+                    if (!R.subReceive(f, msg, -1)) break;
+                    (void)R.dealerSendTo(senderId, "a");
+                }
+            });
+        }
+
+        // Let SUB connects settle to avoid slow-joiner drops
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Warmup rounds
+        for (int w = 0; w < iterations_warmup; ++w) {
+            ASSERT_TRUE(P.pubBroadcast(payload));
+            for (int k = 0; k < num_receivers; ++k) {
+                std::string fromAck, ack;
+                ASSERT_TRUE(P.routerReceive(fromAck, ack, -1));
+            }
+        }
+
+        // Timed rounds
+        std::string fromAck, ack;
+        auto start = clock::now();
+        for (int it = 0; it < iterations; ++it) {
+            P.pubBroadcast(payload);
+            for (int k = 0; k < num_receivers; ++k) {
+                P.routerReceive(fromAck, ack, -1);
+            }
+        }
+        auto end = clock::now();
+
+        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        const double avg_ms_per_round = (static_cast<double>(duration_ns) / iterations) / 1e6;
+        std::cout << "[PUB] Parties " << num_parties
+                  << ": avg round (broadcast+ACKs) = " << avg_ms_per_round
+                  << " ms (payload 1MB)" << std::endl;
+
+        for (auto& t : rxs) if (t.joinable()) t.join();
     }
 }

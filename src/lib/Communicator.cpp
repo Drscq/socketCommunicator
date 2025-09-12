@@ -243,25 +243,18 @@ bool Communicator::dealerSendTo(int peerId, zmq::message_t&& payload) {
 
 bool Communicator::pubBroadcast(const std::string& payload) {
     if (!pub_) return false;
-    // Topic is sender id as string; send multipart [topic][payload]
-    const std::string topic = std::to_string(this->id);
-    zmq::message_t topicFrame(topic.begin(), topic.end());
     zmq::message_t data(payload.begin(), payload.end());
-    auto s1 = pub_->send(topicFrame, zmq::send_flags::sndmore | zmq::send_flags::dontwait);
-    if (!s1.has_value()) return false;
-    auto s2 = pub_->send(data, zmq::send_flags::dontwait);
-    return s2.has_value();
+    auto s = pub_->send(data, zmq::send_flags::dontwait);
+    return s.has_value();
 }
 
 bool Communicator::subReceive(std::string& fromPublisherId, std::string& payload, int timeoutMs) {
     if (!sub_) return false;
     if (timeoutMs >= 0) sub_->set(zmq::sockopt::rcvtimeo, timeoutMs);
-    zmq::message_t topic;
     zmq::message_t data;
-    if (!sub_->recv(topic, zmq::recv_flags::none)) return false;
-    auto r2 = sub_->recv(data, zmq::recv_flags::none);
-    if (!r2.has_value()) return false;
-    fromPublisherId = topic.to_string();
+    auto r = sub_->recv(data, zmq::recv_flags::none);
+    if (!r.has_value()) return false;
+    fromPublisherId.clear();
     payload.assign(static_cast<const char*>(data.data()), data.size());
     return true;
 }
