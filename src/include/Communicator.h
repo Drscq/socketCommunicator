@@ -26,6 +26,12 @@ public:
     void setUpPerPeerDealers();
     void setUpRouterDealer();
 
+    // Fast broadcast path using PUB/SUB (minimal checks for speed)
+    // Bind a PUB socket on tcp://address:(port_base + 1000 + id)
+    void setUpPublisher();
+    // Create one SUB socket and connect to every peer's PUB (skip self). Subscribes to all topics.
+    void setUpSubscribers();
+
     // Messaging API
     // Dealer sends a single-frame payload to connected router(s).
     // Returns true on success, false on failure.
@@ -46,6 +52,12 @@ public:
     // ZeroMQ message_t is movable but not copyable; accept rvalue ref to enable efficient transfer.
     bool dealerSendTo(int peerId, zmq::message_t&& payload);
 
+    // PUB/SUB API
+    // Publish payload under topic = std::to_string(id). Fire-and-forget, non-blocking.
+    bool pubBroadcast(const std::string& payload);
+    // Receive one PUB/SUB message: returns publisher id (topic) and payload. timeoutMs < 0 blocks.
+    bool subReceive(std::string& fromPublisherId, std::string& payload, int timeoutMs = -1);
+
 private:
     int id;
     int port_base;
@@ -54,7 +66,9 @@ private:
 
     // Persistent ZeroMQ context and sockets (created on demand)
     std::unique_ptr<zmq::context_t> context_;
-    std::unique_ptr<zmq::socket_t> router_;
+    std::unique_ptr<zmq::socket_t> router_; // ROUTER socket for incoming messages
+    std::unique_ptr<zmq::socket_t> pub_;    // PUB socket for broadcast
+    std::unique_ptr<zmq::socket_t> sub_;    // SUB socket to receive broadcasts
 
     // Optional: dedicated DEALER sockets per peer for targeted sends.
     std::unordered_map<int, std::unique_ptr<zmq::socket_t>> perPeerDealer_;

@@ -102,6 +102,38 @@ void Communicator::setUpRouterDealer() {
     this->setUpPerPeerDealers();
 }
 
+void Communicator::setUpPublisher() {
+    if (!context_) {
+        context_ = std::make_unique<zmq::context_t>(1);
+    }
+    if (!pub_) {
+        pub_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::pub);
+        std::string bind_address = "tcp://" + address + ":" + std::to_string(port_base + 1000 + id);
+        pub_->bind(bind_address);
+        pub_->set(zmq::sockopt::sndhwm, 0); // no limit
+        // PUB is best-effort; leave sndtimeo default, we use dontwait on send
+    }
+}
+
+void Communicator::setUpSubscribers() {
+    if (!context_) {
+        context_ = std::make_unique<zmq::context_t>(1);
+    }
+    if (!sub_) {
+        sub_ = std::make_unique<zmq::socket_t>(*context_, zmq::socket_type::sub);
+        // Subscribe to all topics
+        sub_->set(zmq::sockopt::subscribe, "");
+        sub_->set(zmq::sockopt::rcvhwm, 0);
+        sub_->set(zmq::sockopt::rcvtimeo, -1);
+    }
+    for (int party_id : this->ids) {
+        if (party_id == this->id) continue;
+        std::string addr = "tcp://" + address + ":" + std::to_string(port_base + 1000 + party_id);
+        // ZeroMQ allows duplicate connects; we don't track to keep overhead minimal.
+        sub_->connect(addr);
+    }
+}
+
 // bool Communicator::dealerSendToAll(const std::string& payload) {
 //     if (!dealer_) return false;
 //     zmq::message_t msg(payload.begin(), payload.end());
@@ -207,4 +239,29 @@ bool Communicator::dealerSendTo(int peerId, zmq::message_t&& payload) {
     auto rc = sockPtr->send(std::move(payload), zmq::send_flags::dontwait);
     if (rc.has_value()) return true;
     return false;
+}
+
+bool Communicator::pubBroadcast(const std::string& payload) {
+    if (!pub_) return false;
+    // Topic is sender id as string; send multipart [topic][payload]
+    const std::string topic = std::to_string(this->id);
+    zmq::message_t topicFrame(topic.begin(), topic.end());
+    zmq::message_t data(payload.begin(), payload.end());
+    auto s1 = pub_->send(topicFrame, zmq::send_flags::sndmore | zmq::send_flags::dontwait);
+    if (!s1.has_value()) return false;
+    auto s2 = pub_->send(data, zmq::send_flags::dontwait);
+    return s2.has_value();
+}
+
+bool Communicator::subReceive(std::string& fromPublisherId, std::string& payload, int timeoutMs) {
+    if (!sub_) return false;
+    if (timeoutMs >= 0) sub_->set(zmq::sockopt::rcvtimeo, timeoutMs);
+    zmq::message_t topic;
+    zmq::message_t data;
+    if (!sub_->recv(topic, zmq::recv_flags::none)) return false;
+    auto r2 = sub_->recv(data, zmq::recv_flags::none);
+    if (!r2.has_value()) return false;
+    fromPublisherId = topic.to_string();
+    payload.assign(static_cast<const char*>(data.data()), data.size());
+    return true;
 }

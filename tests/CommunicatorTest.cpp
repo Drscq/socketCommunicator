@@ -375,3 +375,40 @@ TEST(CommunicatorTest, TimingOfDealerSendToAllParallelAcrossPartyCounts) {
         for (auto& t : rxs) if (t.joinable()) t.join();
     }
 }
+
+TEST(CommunicatorTest, PubSubBroadcastDeliversToAll) {
+    const int num_parties = 5;
+    const int senderId = 1;
+    const std::string payload(256 * 1024, 'b'); // 256KB
+
+    // Start receivers with SUB sockets
+    std::vector<std::thread> rxs;
+    std::vector<std::string> got(num_parties + 1);
+    std::vector<std::string> from(num_parties + 1);
+    for (int rid = 2; rid <= num_parties; ++rid) {
+        rxs.emplace_back([&, rid]() {
+            Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
+            R.setUpSubscribers();
+            std::string f, msg;
+            // Block until broadcast arrives
+            if (R.subReceive(f, msg, -1)) {
+                got[rid] = msg;
+                from[rid] = f;
+            }
+        });
+    }
+
+    // Publisher
+    Communicator P{senderId, BASE_PORT, "127.0.0.1", num_parties};
+    P.setUpPublisher();
+    // Let SUB connects settle briefly
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_TRUE(P.pubBroadcast(payload));
+
+    for (auto& t : rxs) if (t.joinable()) t.join();
+
+    for (int rid = 2; rid <= num_parties; ++rid) {
+        EXPECT_EQ(from[rid], std::to_string(senderId)) << "receiver id=" << rid;
+        EXPECT_EQ(got[rid], payload) << "receiver id=" << rid;
+    }
+}
