@@ -68,7 +68,8 @@ macro(add_sc_test TARGET_NAME)
     add_executable(${TARGET_NAME} ${ARGN})
     set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${OUTPUT_TEST_DIR})
     target_include_directories(${TARGET_NAME} PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/include
+    ${CMAKE_SOURCE_DIR}/src/include
+    ${CMAKE_SOURCE_DIR}/src/NetIOMP
     )
     target_link_libraries(${TARGET_NAME} PRIVATE
         socket_communicator
@@ -86,6 +87,7 @@ endmacro()
 # Define individual test binaries per suite using the macro (always add; build by target)
 add_sc_test(test_communicator tests/CommunicatorTest.cpp)
 add_sc_test(test_mpc          tests/MPCPartiesTest.cpp)
+add_sc_test(test_netiomp_gtest tests/NetIOMPTest.cpp)
 
 # Aggregate target to build all test executables
 add_custom_target(build_tests DEPENDS ${ALL_TEST_TARGETS})
