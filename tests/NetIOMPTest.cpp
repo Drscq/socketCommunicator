@@ -88,3 +88,97 @@ TEST(NetIOMPTest, TimingAcrossPayloadSizes) {
 
     if (t2.joinable()) t2.join();
 }
+
+// Helper to run the party-count timing test for a compile-time party count N
+template <int N>
+static void run_partycount_timing(int base_port, size_t payload_size, int iterations_warmup, int iterations) {
+    using clock = std::chrono::steady_clock;
+
+    const int sender_id = 1;
+    const int num_receivers = N - 1;
+    const int port = base_port; // caller can vary if desired
+
+    // Launch receiver threads 2..N
+    std::vector<std::thread> rxs;
+    for (int rid = 2; rid <= N; ++rid) {
+        rxs.emplace_back([=]() {
+            NetIOMP<N> io(rid, port);
+            std::vector<char> buf(payload_size);
+            const int total_rounds = iterations_warmup + iterations;
+            for (int i = 0; i < total_rounds; ++i) {
+                io.recv_data(sender_id, buf.data(), buf.size());
+                char ack = 'a';
+                io.send_data(sender_id, &ack, 1);
+                io.flush();
+            }
+        });
+    }
+
+    // Create sender in main thread after launching receivers
+    NetIOMP<N> S(sender_id, port);
+
+    // Brief settle time for connections
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    std::vector<char> payload(payload_size, 'x');
+
+    // Warmup rounds: send to all then wait for all ACKs
+    for (int w = 0; w < iterations_warmup; ++w) {
+        for (int rid = 2; rid <= N; ++rid) {
+            S.send_data(rid, payload.data(), payload.size());
+        }
+        S.flush();
+        for (int rid = 2; rid <= N; ++rid) {
+            char ack = 0;
+            S.recv_data(rid, &ack, 1);
+        }
+    }
+
+    // Timed rounds: send to all then wait for all ACKs
+    auto start = clock::now();
+    for (int it = 0; it < iterations; ++it) {
+        for (int rid = 2; rid <= N; ++rid) {
+            S.send_data(rid, payload.data(), payload.size());
+        }
+        S.flush();
+        for (int k = 0; k < num_receivers; ++k) {
+            // ACK order may vary; read from each receiver deterministically
+            int rid = 2 + k;
+            char ack = 0;
+            S.recv_data(rid, &ack, 1);
+        }
+    }
+    auto end = clock::now();
+
+    const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    const double avg_ms_per_round = (static_cast<double>(duration_ns) / iterations) / 1e6;
+    std::cout << "[NetIOMP] Parties " << N
+              << ": avg round (send-all+ACKs) = " << avg_ms_per_round
+              << " ms (payload 1MB)" << std::endl;
+
+    for (auto& t : rxs) if (t.joinable()) t.join();
+}
+
+TEST(NetIOMPTest, TimingAcrossPartyCounts) {
+    // Mirror CommunicatorTest.TimingOfDealerSendAcrossPartyCounts
+    const std::vector<int> party_counts = {2, 4, 6, 8, 10};
+    const size_t payload_size = 1024 * 1024; // 1MB
+    const int iterations_warmup = 5;
+    const int iterations = 200; // match Communicator test balance
+
+    // Use distinct base port to avoid any potential overlap with other tests
+    const int base_port = 42100;
+
+    for (int np : party_counts) {
+        // For each party count, dispatch to the appropriate template instantiation
+        const int port = base_port + np * 10; // spread ports a bit between runs
+        switch (np) {
+            case 2:  run_partycount_timing<2>(port,  payload_size, iterations_warmup, iterations);  break;
+            case 4:  run_partycount_timing<4>(port,  payload_size, iterations_warmup, iterations);  break;
+            case 6:  run_partycount_timing<6>(port,  payload_size, iterations_warmup, iterations);  break;
+            case 8:  run_partycount_timing<8>(port,  payload_size, iterations_warmup, iterations);  break;
+            case 10: run_partycount_timing<10>(port, payload_size, iterations_warmup, iterations);  break;
+            default: FAIL() << "Unsupported party count in test: " << np; break;
+        }
+    }
+}
