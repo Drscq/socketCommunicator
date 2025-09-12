@@ -5,17 +5,12 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
-
+#define BASE_PORT 10000
 TEST(CommunicatorTest, ConstructorStoresValues) {
     Communicator c{42, 5000, "192.168.1.10"};
     EXPECT_EQ(c.getId(), 42);
     EXPECT_EQ(c.getPortBase(), 5000);
     EXPECT_EQ(c.getAddress(), std::string("192.168.1.10"));
-}
-
-TEST(CommunicatorTest, DefaultAddressIsLocalhost) {
-    Communicator c{1, 8080};
-    EXPECT_EQ(c.getAddress(), std::string("localhost"));
 }
 
 TEST(CommunicatorTest, SetUpRouterDoesNotThrow) {
@@ -24,182 +19,19 @@ TEST(CommunicatorTest, SetUpRouterDoesNotThrow) {
     EXPECT_NO_THROW(c.setUpRouter());
 }
 
-TEST(CommunicatorTest, SetUpDealerWithEmptyListDoesNotThrow) {
-    // Test that setUpDealer with empty party list doesn't throw
-    Communicator c{1, 9100, "127.0.0.1"};
-    std::vector<int> empty_list;
-    EXPECT_NO_THROW(c.setUpDealer(empty_list));
-}
-
-TEST(CommunicatorTest, SetUpDealerWithSelfOnlyDoesNotThrow) {
-    // Test that setUpDealer with only self in party list doesn't throw
-    Communicator c{1, 9200, "127.0.0.1"};
-    std::vector<int> self_only{1};
-    EXPECT_NO_THROW(c.setUpDealer(self_only));
-}
-
-TEST(CommunicatorTest, SetUpDealerWithMultiplePartiesDoesNotThrow) {
-    // Test that setUpDealer with multiple parties doesn't throw
-    // Note: This test may fail if the router endpoints aren't available
-    // but it tests the method signature and basic functionality
-    Communicator c{1, 9300, "127.0.0.1"};
-    std::vector<int> party_list{1, 2, 3};
-    
-    // For now, just test that the method can be called
-    // In a real scenario, you'd want to set up actual routers first
-    EXPECT_NO_THROW(c.setUpDealer(party_list));
-}
-
-TEST(CommunicatorTest, IntegrationTestRouterDealerSetup) {
-    // Integration test showing router and dealer setup work together
-    // This test demonstrates the intended usage pattern
-    
-    // Set up router for party 1
-    Communicator router_comm{1, 9400, "127.0.0.1"};
-    
-    // Set up dealer for party 2 that will connect to party 1
-    Communicator dealer_comm{2, 9400, "127.0.0.1"};
-    std::vector<int> party_list{1, 2}; // Party 2 connects to party 1
-    
-    // Both should set up without throwing
-    EXPECT_NO_THROW(router_comm.setUpRouter());
-    EXPECT_NO_THROW(dealer_comm.setUpDealer(party_list));
-}
-
-TEST(CommunicatorTest, DealerSendRouterReceive) {
-    // Set up router (id=1) and dealer (id=2) on same address/port base
-    Communicator router{1, 9500, "127.0.0.1"};
-    Communicator dealer{2, 9500, "127.0.0.1"};
-
-    router.setUpRouter();
-    dealer.setUpDealer({1, 2});
-
-    // Give a tiny moment for connection establishment
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    // Send from dealer and receive at router
-    ASSERT_TRUE(dealer.dealerSend("hello"));
-
-    std::string from;
-    std::string msg;
-    ASSERT_TRUE(router.routerReceive(from, msg, 1000));
-    EXPECT_EQ(from, std::to_string(2));
-    EXPECT_EQ(msg, "hello");
-}
-
-TEST(CommunicatorTest, TwoPartiesBidirectionalManyRounds) {
-    // Party A: id=1, Party B: id=2
-    Communicator A{1, 9600, "127.0.0.1"};
-    Communicator B{2, 9600, "127.0.0.1"};
-
-    // Setup
-    A.setUpRouter();
-    B.setUpRouter();
-    A.setUpDealer({1,2}); // A connects to B's router
-    B.setUpDealer({1,2}); // B connects to A's router
-
-    // Allow brief time for connections
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    const int rounds = 5;
-    for (int r = 0; r < rounds; ++r) {
-        // A -> B
-        ASSERT_TRUE(A.dealerSend("ping-" + std::to_string(r)));
-        std::string from, msg;
-        ASSERT_TRUE(B.routerReceive(from, msg, 1000));
-        EXPECT_EQ(from, std::to_string(1));
-        EXPECT_EQ(msg, "ping-" + std::to_string(r));
-
-        // B responds to A using routerSend (addressed by A's identity)
-        ASSERT_TRUE(B.routerSend(std::to_string(1), "pong-" + std::to_string(r)));
-        std::string recv;
-        ASSERT_TRUE(A.dealerReceive(recv, 1000));
-        EXPECT_EQ(recv, "pong-" + std::to_string(r));
-    }
-}
-
-TEST(CommunicatorTest, FivePartiesFullMeshRoundRobinTwoCycles) {
-    // IDs 1..5 on same base
-    const int base = 9700;
-    const std::string host = "127.0.0.1";
-    const std::vector<int> ids{1,2,3,4,5};
-
-    // Create parties
-    std::vector<std::unique_ptr<Communicator>> parties;
-    parties.reserve(ids.size());
-    for (int id : ids) {
-        parties.emplace_back(std::make_unique<Communicator>(id, base, host));
-    }
-
-    // Routers and dealers
-    for (auto& p : parties) p->setUpRouter();
-    for (auto& p : parties) p->setUpDealer(ids);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-
-    // Each dealer sends 8 messages (2 full round-robin cycles over 4 peers)
-    const int cycles = 2;     // expect 2 messages per peer
-    const int perCycle = 4;   // 4 peers
-    for (int c = 0; c < cycles; ++c) {
-        for (int m = 0; m < perCycle; ++m) {
-            for (size_t i = 0; i < parties.size(); ++i) {
-                const int fromId = ids[i];
-                ASSERT_TRUE(parties[i]->dealerSend("m-" + std::to_string(fromId) + "-" + std::to_string(c) + "-" + std::to_string(m)));
-            }
-        }
-    }
-
-    // Collect on routers until each router has received exactly 'cycles' messages from each other id
-    std::unordered_map<int, std::unordered_map<int,int>> recvCounts; // routerId -> (fromId -> count)
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    size_t satisfiedRouters = 0;
-    std::unordered_set<int> satisfied;
-
-    while (std::chrono::steady_clock::now() < deadline) {
-        bool any = false;
-        for (size_t j = 0; j < parties.size(); ++j) {
-            const int routerId = ids[j];
-            std::string from, payload;
-            if (parties[j]->routerReceive(from, payload, 5)) {
-                any = true;
-                int fromId = std::stoi(from);
-                if (fromId != routerId) {
-                    recvCounts[routerId][fromId]++;
-                }
-            }
-
-            // Check satisfaction for this router
-            bool ok = true;
-            for (int other : ids) {
-                if (other == routerId) continue;
-                if (recvCounts[routerId][other] != cycles) { ok = false; break; }
-            }
-            if (ok && !satisfied.count(routerId)) {
-                satisfied.insert(routerId);
-            }
-        }
-        if (satisfied.size() == ids.size()) break;
-        if (!any) std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    // Assert all routers satisfied
-    for (int routerId : ids) {
-        for (int other : ids) {
-            if (other == routerId) continue;
-            ASSERT_EQ(recvCounts[routerId][other], cycles) << "router " << routerId << " from " << other;
-        }
-    }
-}
-
 TEST(CommunicatorTest, DealerSendToTargetsSpecificPeer) {
     const int base = 9900;
-    Communicator A{1, base, "127.0.0.1"};
-    Communicator B{2, base, "127.0.0.1"};
-    Communicator C{3, base, "127.0.0.1"};
+    const int num_parties = 3;
+    Communicator A{1, base, "127.0.0.1", num_parties};
+    Communicator B{2, base, "127.0.0.1", num_parties};
+    Communicator C{3, base, "127.0.0.1", num_parties};
 
     A.setUpRouter();
     B.setUpRouter();
     C.setUpRouter();
+    A.setUpPerPeerDealers();
+    B.setUpPerPeerDealers();
+    C.setUpPerPeerDealers();
 
     // A will create dedicated sockets per peer as needed
     // No need to call setUpDealer on A for this test
@@ -216,4 +48,330 @@ TEST(CommunicatorTest, DealerSendToTargetsSpecificPeer) {
     ASSERT_TRUE(C.routerReceive(from, msg, 1000));
     EXPECT_EQ(from, std::to_string(1));
     EXPECT_EQ(msg, "to-C");
+}
+
+TEST(CommunicatorTest, TimingOfDealerSendToTargetsSpecificPeer) {
+    const int num_parties = 2;
+    // Create the sender Communicator in this (main) thread, but delay dealer setup
+    // until the receiver thread has fully initialized its Router to respect ZMQ thread affinity.
+    Communicator A{1, BASE_PORT, "127.0.0.1", num_parties};
+
+    // Fixed 1MB payload for all iterations
+    std::string payload(1024 * 1024, 'x'); // 1MB message
+    // Run the receiver on B in a dedicated thread while A sends in this thread.
+    using clock = std::chrono::steady_clock;
+
+    const int iterations = 1000;
+    const int iterations_warmup = 5;
+    const int total_expected = iterations_warmup + iterations;
+
+    std::thread rx([&](){
+        // All ZMQ sockets for B are created and used within this thread.
+        Communicator B{2, BASE_PORT, "127.0.0.1", num_parties};
+        B.setUpRouterDealer();
+        std::string from; (void)from;
+        std::string msg;
+        for (int i = 0; i < total_expected; ++i) {
+            // Block until a message arrives (set a long-ish timeout to avoid flakes in CI)
+            bool ok = B.routerReceive(from, msg, -1);
+            if (!ok) break;
+        }
+    });
+
+    // After receiver is ready, set up A's dealers so connects happen after B is bound
+    A.setUpRouterDealer();
+
+    // Warmup sends (not timed)
+    for (int i = 0; i < iterations_warmup; ++i) {
+        zmq::message_t warm_msg(payload.data(), payload.size());
+        ASSERT_TRUE(A.dealerSendTo(2, std::move(warm_msg)));
+    }
+
+    // Timed burst of N sends while receiver drains concurrently
+    auto start = clock::now();
+    for (int i = 0; i < iterations; ++i) {
+        zmq::message_t send_msg(payload.data(), payload.size());
+        ASSERT_TRUE(A.dealerSendTo(2, std::move(send_msg)));
+    }
+
+    if (rx.joinable()) rx.join();
+    auto end = clock::now();
+
+    auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    double avg_ns = static_cast<double>(duration_ns) / iterations;
+    std::cout << "Measured dealerSendTo avg enqueue time: " << avg_ns / 1e6 << " ms" << std::endl;
+    // Theoretical delay calculation
+    // bandwidth 14.4 Gbps
+    double bandwidth_gbps = 14.4;
+    // RTT min/avg/max/mdev = 0.022/0.038/0.057/0.010 ms
+    double rtt_avg = 0.038;
+    std::cout << "Message Size: " << payload.size() << " bytes" << std::endl;
+    double theoretical_time_ms = (payload.size() * 8) / (bandwidth_gbps * 1e6) + rtt_avg / 2;
+    std::cout << "Theoretical dealerSendTo time: " << theoretical_time_ms << " ms" << std::endl;
+}
+
+TEST(CommunicatorTest, TimingOfDealerSendAcrossPayloadSizes) {
+    const int num_parties = 2;
+    Communicator A{1, BASE_PORT, "127.0.0.1", num_parties};
+
+    using clock = std::chrono::steady_clock;
+    const int iterations_warmup = 5;
+    // Single knob to control iterations across all payload sizes
+    const int iterations = 1000; // adjust as needed for runtime/precision trade-off
+
+    // Sweep sizes from 8 bytes up to 1MB (log-spaced, coarse to keep runtime reasonable)
+    const std::vector<size_t> sizes = {
+        8u, 64u, 512u, 4096u, 32768u, 262144u, 1048576u
+    };
+
+    // Receiver thread: drain all messages across all sizes
+    const size_t total_expected = sizes.size() * static_cast<size_t>(iterations_warmup + iterations);
+
+    std::thread rx([&](){
+        Communicator B{2, BASE_PORT, "127.0.0.1", num_parties};
+        B.setUpRouterDealer();
+        std::string from; (void)from;
+        std::string msg;
+        for (size_t i = 0; i < total_expected; ++i) {
+            // Receive from A's DEALER on B's ROUTER
+            if (!B.routerReceive(from, msg, -1)) break;
+            // Echo back a small ACK from B's DEALER to A's ROUTER to complete round-trip
+            int toId = 1;
+            (void)B.dealerSendTo(toId, "a");
+        }
+    });
+
+    A.setUpRouterDealer();
+
+    // Network characteristics for theoretical timing (ms)
+    const double bandwidth_gbps = 14.4;   // 14.4 Gbps
+    const double rtt_avg_ms = 0.038;      // average RTT in ms
+
+    for (size_t idx = 0; idx < sizes.size(); ++idx) {
+        const size_t sz = sizes[idx];
+
+        std::string payload(sz, 'x');
+
+        // Warmup: send then wait for ACK to avoid queue buildup (not timed)
+        for (int i = 0; i < iterations_warmup; ++i) {
+            zmq::message_t warm_msg(payload.data(), payload.size());
+            ASSERT_TRUE(A.dealerSendTo(2, std::move(warm_msg)));
+            std::string fromAck, ack;
+            ASSERT_TRUE(A.routerReceive(fromAck, ack, -1));
+        }
+
+    // Timed end-to-end (send + ACK receive) round-trips
+    std::string fromAck, ack;
+        auto start = clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            zmq::message_t send_msg(payload.data(), payload.size());
+            A.dealerSendTo(2, std::move(send_msg));
+            A.routerReceive(fromAck, ack, -1);
+        }
+        auto end = clock::now();
+
+        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        const double avg_ms = (static_cast<double>(duration_ns) / iterations) / 1e6; // ns -> ms (round-trip)
+
+        // Theoretical round-trip in ms: serialization (outbound) + RTT (assume tiny ACK)
+        const double theoretical_ms = (static_cast<double>(sz) * 8.0) / (bandwidth_gbps * 1e6) + rtt_avg_ms;
+        const double diff_ms = avg_ms - theoretical_ms;
+        const double pct = theoretical_ms > 0.0 ? (diff_ms / theoretical_ms) * 100.0 : 0.0;
+
+    std::cout << "Size " << sz << " bytes: avg end-to-end (send+ACK) = " << avg_ms
+                  << " ms, theoretical (RTT-based) = " << theoretical_ms
+                  << " ms, diff = " << diff_ms << " ms (" << pct << "%)" << " with iteractions " << iterations << std::endl;
+    }
+
+    if (rx.joinable()) rx.join();
+}
+
+TEST(CommunicatorTest, TimingOfDealerSendAcrossPartyCounts) {
+    // Measure timing as number of parties increases; party 1 sends 1MB to all others
+    using clock = std::chrono::steady_clock;
+    const std::vector<int> party_counts = {2, 4, 6, 8, 10};
+    const size_t payload_size = 1024 * 1024; // 1MB
+    const int iterations_warmup = 5;
+    const int iterations = 200; // keep runtime reasonable while averaging
+
+    for (int num_parties : party_counts) {
+        const int senderId = 1;
+        const int num_receivers = num_parties - 1;
+
+        // Prepare payload
+        std::string payload(payload_size, 'x');
+         // Sender in main thread
+        Communicator S{senderId, BASE_PORT, "127.0.0.1", num_parties};
+        S.setUpRouterDealer();
+
+    // Launch receiver threads (2..num_parties). Each has its own sockets in its own thread.
+        std::vector<std::thread> rxs;
+
+        for (int rid = 2; rid <= num_parties; ++rid) {
+            rxs.emplace_back([&, rid]() {
+                Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
+                R.setUpRouterDealer();
+                std::string from; std::string msg;
+                // Each receiver processes all warmup + timed messages, ACKing each one
+                const int total_rounds = iterations_warmup + iterations;
+                for (int i = 0; i < total_rounds; ++i) {
+                    // Receive from sender; long timeout to avoid flakes
+                    if (!R.routerReceive(from, msg, -1)) break;
+                    // ACK back to sender
+                    (void)R.dealerSendTo(senderId, "a");
+                }
+            });
+        }
+
+
+        // Warmup: for stability, send to each receiver then wait for that many ACKs
+        for (int w = 0; w < iterations_warmup; ++w) {
+            for (int rid = 2; rid <= num_parties; ++rid) {
+                zmq::message_t warm_msg(payload.data(), payload.size());
+                ASSERT_TRUE(S.dealerSendTo(rid, std::move(warm_msg)));
+            }
+            for (int rid = 2; rid <= num_parties; ++rid) {
+                std::string fromAck, ack;
+                ASSERT_TRUE(S.routerReceive(fromAck, ack, -1));
+            }
+        }
+
+        // Timed: Send to all receivers and wait for num_receivers ACKs, repeat iterations times
+        std::string fromAck, ack;
+        auto start = clock::now();
+        for (int it = 0; it < iterations; ++it) {
+            for (int rid = 2; rid <= num_parties; ++rid) {
+                zmq::message_t msg(payload.data(), payload.size());
+                S.dealerSendTo(rid, std::move(msg));
+            }
+            for (int k = 0; k < num_receivers; ++k) {
+                S.routerReceive(fromAck, ack, -1);
+            }
+        }
+        auto end = clock::now();
+
+        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        const double avg_ms_per_round = (static_cast<double>(duration_ns) / iterations) / 1e6; // one round = send to all + wait all ACKs
+        std::cout << "Parties " << num_parties
+                  << ": avg round (send-all+ACKs) = " << avg_ms_per_round << " ms (payload 1MB)" << std::endl;
+
+        for (auto& t : rxs) if (t.joinable()) t.join();
+    }
+}
+
+TEST(CommunicatorTest, DealerSendToAllParallelSendsToAllPeers) {
+    const int num_parties = 5; // 1 sender + 4 receivers
+    const int senderId = 1;
+    const int size = 1024 * 1024;
+    std::string payload(size, 'x'); // 1MB message
+
+    // Synchronize readiness of receiver ROUTER sockets before sender connects
+    const int num_receivers = num_parties - 1;
+
+    // Storage for what each receiver observed
+    std::vector<std::string> fromById(num_parties + 1);
+    std::vector<std::string> msgById(num_parties + 1);
+
+    std::vector<std::thread> rxs;
+    for (int rid = 2; rid <= num_parties; ++rid) {
+        rxs.emplace_back([&, rid]() {
+            // Create each receiver's sockets within its own thread (ZMQ thread affinity)
+            Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
+            R.setUpRouter();
+            std::string from; std::string msg;
+            // Wait for the sender's message
+            bool ok = R.routerReceive(from, msg);
+            if (ok) {
+                fromById[rid] = from;
+                msgById[rid] = msg;
+            }
+        });
+    }
+
+
+    // Sender in the main thread: prepare per-peer DEALER sockets and send in parallel
+    Communicator S{senderId, BASE_PORT, "127.0.0.1", num_parties};
+    S.setUpPerPeerDealers();
+
+    // Give ZeroMQ a brief moment to finish handshakes to avoid dontwait send races
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto start = std::chrono::steady_clock::now();
+    ASSERT_TRUE(S.dealerSendToAllParallel(payload));
+
+    for (auto& t : rxs) if (t.joinable()) t.join();
+    auto end = std::chrono::steady_clock::now();
+    auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    double avg_ns = static_cast<double>(duration_ns);
+    std::cout << "Measured dealerSendToAllParallel total enqueue time: " << avg_ns / 1e6 << " ms" << std::endl;
+
+    // Verify every receiver got the payload from the sender's identity
+    for (int rid = 2; rid <= num_parties; ++rid) {
+        EXPECT_EQ(fromById[rid], std::to_string(senderId)) << "receiver id=" << rid;
+        EXPECT_EQ(msgById[rid], payload) << "receiver id=" << rid;
+    }
+}
+
+TEST(CommunicatorTest, TimingOfDealerSendToAllParallelAcrossPartyCounts) {
+    // Measure timing as number of parties increases using dealerSendToAllParallel; sender 1 sends 1MB to all others
+    using clock = std::chrono::steady_clock;
+    const std::vector<int> party_counts = {2, 4, 6, 8, 10};
+    const size_t payload_size = 1024 * 1024; // 1MB
+    const int iterations_warmup = 5;
+    const int iterations = 200; // balance runtime vs precision
+
+    for (int num_parties : party_counts) {
+        const int senderId = 1;
+        const int num_receivers = num_parties - 1;
+
+        std::string payload(payload_size, 'x');
+
+        // Sender in main thread
+        Communicator S{senderId, BASE_PORT, "127.0.0.1", num_parties};
+        S.setUpRouterDealer();
+
+        // Receivers: each loops through all warmup+timed rounds and ACKs each message
+        std::vector<std::thread> rxs;
+        for (int rid = 2; rid <= num_parties; ++rid) {
+            rxs.emplace_back([&, rid]() {
+                Communicator R{rid, BASE_PORT, "127.0.0.1", num_parties};
+                R.setUpRouterDealer();
+                std::string from; std::string msg;
+                const int total_rounds = iterations_warmup + iterations;
+                for (int i = 0; i < total_rounds; ++i) {
+                    if (!R.routerReceive(from, msg, -1)) break;
+                    (void)R.dealerSendTo(senderId, "a");
+                }
+            });
+        }
+
+        // Let connections settle briefly
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Warmup rounds
+        for (int w = 0; w < iterations_warmup; ++w) {
+            ASSERT_TRUE(S.dealerSendToAllParallel(payload));
+            for (int k = 0; k < num_receivers; ++k) {
+                std::string fromAck, ack;
+                ASSERT_TRUE(S.routerReceive(fromAck, ack, -1));
+            }
+        }
+
+        // Timed rounds
+        std::string fromAck, ack;
+        auto start = clock::now();
+        for (int it = 0; it < iterations; ++it) {
+            ASSERT_TRUE(S.dealerSendToAllParallel(payload));
+            for (int k = 0; k < num_receivers; ++k) {
+                S.routerReceive(fromAck, ack, -1);
+            }
+        }
+        auto end = clock::now();
+
+        const auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        const double avg_ms_per_round = (static_cast<double>(duration_ns) / iterations) / 1e6;
+        std::cout << "[Parallel] Parties " << num_parties
+                  << ": avg round (send-all+ACKs) = " << avg_ms_per_round << " ms (payload 1MB)" << std::endl;
+
+        for (auto& t : rxs) if (t.joinable()) t.join();
+    }
 }

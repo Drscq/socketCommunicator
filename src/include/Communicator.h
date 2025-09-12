@@ -41,11 +41,10 @@ public:
     // Router sends a single-frame payload to a specific dealer identity.
     bool routerSend(const std::string& toIdentity, const std::string& payload);
 
-    // Dealer receives one message payload from router.
-    bool dealerReceive(std::string& payload, int timeoutMs = 1000);
-
     // Dealer sends to a specific peer's router using a dedicated per-peer DEALER socket.
     bool dealerSendTo(int peerId, const std::string& payload);
+    // ZeroMQ message_t is movable but not copyable; accept rvalue ref to enable efficient transfer.
+    bool dealerSendTo(int peerId, zmq::message_t&& payload);
 
 private:
     int id;
@@ -56,7 +55,6 @@ private:
     // Persistent ZeroMQ context and sockets (created on demand)
     std::unique_ptr<zmq::context_t> context_;
     std::unique_ptr<zmq::socket_t> router_;
-    std::unique_ptr<zmq::socket_t> dealer_;
 
     // Optional: dedicated DEALER sockets per peer for targeted sends.
     std::unordered_map<int, std::unique_ptr<zmq::socket_t>> perPeerDealer_;

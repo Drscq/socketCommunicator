@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <iomanip>
+#include <random> 
 
 
 
@@ -111,8 +112,9 @@ static std::chrono::milliseconds run_send_test(int N, const std::string& data, b
 }
 
 TEST(MPCPartiesTest, SendToAllPerformanceComparison) {
-    std::vector<int> party_counts = {2, 4, 8, 14};
-    std::vector<size_t> data_sizes = {4096, 16384, 65536, 262144, 1048576}; // 4KB, 16KB, 64KB, 256KB, 1MB
+    std::vector<int> party_counts = {2, 4, 6, 8, 10}; // number of parties
+    // std::vector<size_t> data_sizes = {4096, 16384, 65536, 262144, 1048576}; // 4KB, 16KB, 64KB, 256KB, 1MB
+    std::vector<size_t> data_sizes = {1048576};
     const int iterations = 10; // repeat runs to stabilize measurements
 
     std::cout << std::endl;
@@ -146,4 +148,43 @@ TEST(MPCPartiesTest, SendToAllPerformanceComparison) {
     std::cout << "----------------------------------------" << std::endl;
 }
 
+
+TEST(MPCPartiesTest, addition_delay) {
+    int64_t a;
+    int64_t b;
+    int64_t Q = 8380417; // a prime number
+    // get a random 64-bit integer
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<int64_t> dis;
+    int64_t c;
+    std::chrono::_V2::system_clock::time_point start;
+    std::chrono::_V2::system_clock::time_point end;
+    std::chrono::_V2::system_clock::rep total_duration_add = 0, total_duration_mul = 0;
+    for (int i = 0; i < 100; i++) {
+         a = dis(gen);
+         b = dis(gen);
+        start = std::chrono::high_resolution_clock::now();
+        c = (a + b) % Q;
+        end = std::chrono::high_resolution_clock::now();
+        total_duration_add += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    }
+    total_duration_add = total_duration_add / 100;
+    std::cout << "Addition took " << total_duration_add << " nanoseconds." << std::endl;
+    EXPECT_EQ(c, (a + b) % Q);
+
+    int64_t d;
+    for (int i = 0; i < 100; i++) {
+        a = dis(gen);
+        b = dis(gen);
+
+        start = std::chrono::high_resolution_clock::now();
+        d = (a * b) % Q;
+        end = std::chrono::high_resolution_clock::now();
+        total_duration_mul += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    }
+    total_duration_mul = total_duration_mul / 100;
+    std::cout << "Multiplication took " << total_duration_mul << " nanoseconds." << std::endl;
+    EXPECT_EQ(d, (a * b) % Q);
+}
 

@@ -47,10 +47,10 @@ int main(int argc, char** argv) {
               << " iters=" << args.iters << "\n";
 
     // Party A (router id=1), Party B (dealer id=2)
-    Communicator router{1, args.base, args.address};
-    Communicator dealer{2, args.base, args.address};
+    Communicator router{1, args.base, args.address, 2};
+    Communicator dealer{2, args.base, args.address, 2};
     router.setUpRouter();
-    dealer.setUpDealer({1, 2});
+    dealer.setUpRouterDealer();
 
     // Prepare random payload (binary-safe)
     std::string payload;
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
 
     // Warm-up
     for (int i = 0; i < 3; ++i) {
-        dealer.dealerSend(payload);
+        dealer.dealerSendTo(1, payload);
         std::string from, recv;
         router.routerReceive(from, recv, 1000);
     }
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
 
     for (int i = 0; i < args.iters; ++i) {
         auto t0 = std::chrono::steady_clock::now();
-        if (!dealer.dealerSend(payload)) {
+        if (!dealer.dealerSendTo(1, payload)) {
             std::cerr << "send failed at iter " << i << "\n";
             return 2;
         }

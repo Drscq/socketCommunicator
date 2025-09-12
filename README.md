@@ -30,6 +30,7 @@ You can also run a specific test executable with GoogleTest flags. For example, 
 
 ```bash
 ./build/test/test_mpc --gtest_filter=MPCPartiesTest.NPartyAllToAllSumThreaded --gtest_repeat=10
+./test/test_mpc --gtest_filter=MPCPartiesTest.SendToAllPerformanceComparison
 ```
 
 ## Latency benchmark

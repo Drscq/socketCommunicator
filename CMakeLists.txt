@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optimize and suppress warnings globally
-add_compile_options(-O3 -w)
+add_compile_options(-O3 -w -march=native)
 
 # Add x86-specific SIMD flags only when building on x86/x64. These flags are
 # not recognized on arm64 (e.g., Apple Silicon) and will break the build.
