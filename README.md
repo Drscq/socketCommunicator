@@ -93,11 +93,11 @@ A simple local smoke test for the extracted NetIOMP components. Build first, the
 
 ```bash
 PORT=23456; \
-( /home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 1 "$PORT" & pid1=$!; \
+( ./test_netiomp 1 "$PORT" & pid1=$!; \
 	sleep 0.2; \
-	/home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 2 "$PORT" & pid2=$!; \
+	./test_netiomp 2 "$PORT" & pid2=$!; \
 	sleep 0.2; \
-	/home/thanghoang/fun_project/socketCommunicator/build/test/test_netiomp 3 "$PORT" & pid3=$!; \
+	./test_netiomp 3 "$PORT" & pid3=$!; \
 	wait $pid1 $pid2 $pid3 )
 ```
 
